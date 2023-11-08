@@ -1,0 +1,20 @@
+services:
+
+  # A service entry would use the FQDN of the TACACS or RADIUS server with properties
+  #   username, password and secret
+  # Note that YAML anchors are not supported
+
+  tacacs01-dev.example.net:
+    username: XXX
+    password: '*****'
+    secret: '***'
+
+  tacacs01.example.net:
+    username: XXXX
+    password: '****'
+    secret: '***'
+
+  radius01-dev.example.net:
+    username: XXX
+    password: '***'
+    secret: '***'

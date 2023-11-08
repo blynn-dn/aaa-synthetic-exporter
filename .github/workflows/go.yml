@@ -1,0 +1,99 @@
+# Build and Deploy aaa-synthetic-exporter
+# NOT that some variables in the env section will require population to match your environment
+
+name: Go
+
+on:
+  push:
+    branches:
+      - "main"
+      - "dev"
+  pull_request:
+    branches:
+      - "main"
+      - "dev"
+
+permissions:
+  id-token: write   # This is required for requesting the JWT
+  contents: read    # This is required for actions/checkout
+env:
+  AWS_REGION: "us-east-2"
+  APP_NAME: "aaa-synthetic-exporter"
+  AWS_ROLE: "<ADD the ARN of the AWS role which permits GitHub Action AssumeRoleWithAction>"
+  AWS_ROLE_SESSION: "<give the session a name>"
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.20'
+
+    # make sure to set CGO_ENABLED=0 for a static vs linked binary
+    - name: Build
+      run: CGO_ENABLED=0 go build -ldflags "-s -w"
+
+    - name: Test
+      run: go test -v ./...
+
+    - name: Upload aaa-synthetic-exporter artifact  
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ env.APP_NAME }}
+        path: ${{ env.APP_NAME }}
+        if-no-files-found: error 
+        
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [build]
+    #if: ${{ github.ref == 'refs/heads/dev' && github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' }}
+    
+    steps:
+      - name: Extract branch name
+        shell: bash
+        run: echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
+        id: extract_branch
+
+      # make sure to check out code for access to Dockerfile
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ env.AWS_ROLE }}
+          role-session-name: ${{ env.AWS_ROLE_SESSION }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sts GetCallerIdentity
+        run: |
+            aws sts get-caller-identity      
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Download aaa-synthetic-exporter artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: aaa-synthetic-exporter
+
+      - name: Check whether ECR repo exists
+        id: ecr-repo-check
+        run: |
+          aws ecr describe-repositories --repository-names ${{ env.APP_NAME }} --region ${{ env.AWS_REGION }}    
+
+      - name: Build, tag, and push image to AWS ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ env.APP_NAME }}
+          IMAGE_TAG: ${{ steps.extract_branch.outputs.branch }}
+        run: |
+            docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+            docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG      
